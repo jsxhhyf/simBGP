@@ -6,7 +6,8 @@ import re;
 import time;
 import random;
 import threading;
-from SocketServer import TCPServer, StreamRequestHandler, ThreadingMixIn
+import multiprocessing;
+import socket
 
 MAX_PATH_NUMBER = 1;
 
@@ -158,7 +159,7 @@ class CRouter:
         # by Phil
         self.is_cross_server = False;
         self.neighbor_servers = [0, 0, 0]
-        self.remote_peers = {}
+        self.remote_peers = []
 
     def __str__(self):
         return str(self.id) + "(" + str(self.asn) + ")";
@@ -330,11 +331,15 @@ class CRouter:
         if self.origin_rib.has_key(prefix):
             inpaths.append(self.origin_rib[prefix]);
         else:
-            for peer in self.peers.values(): # to be modified
+            for peer in self.peers.values():
                 if peer.rib_in.has_key(prefix):
                     for path in peer.rib_in[prefix]:
                         inpaths.append(path);
             inpaths.sort(self.comparePath);
+            # used for distributed simulation by Phil
+            # for [peer, server] in self.remote_peers:
+
+
         if backup_routing and self.loc_rib.has_key(prefix) and len(self.loc_rib[prefix]) > 0 and self.loc_rib[prefix][
             0].alternative == ALTERNATIVE_BACKUP and len(inpaths) > 0 and inpaths[
             0].alternative == ALTERNATIVE_BACKUP:  # and self.loc_rib[prefix][0].weight == inpaths[0].weight:
@@ -1432,7 +1437,7 @@ def readConfig(filename):
                     if len(cmd) == 5:
                         curRT.is_cross_server = True
                         curRT.neighbor_servers[int(cmd[4]) - 1] = 1
-                        curRT.remote_peers[peerid] = curNB
+                        curRT.remote_peers.append([peerid, cmd[4]])
                 else:
                     print "unknown neighbor configuration", cmd[2], "in", cmd;
                     sys.exit(-1);
@@ -1555,39 +1560,43 @@ _systime = 0;
 # used for distributed simulation
 # by Phil
 
-class Server(ThreadingMixIn, TCPServer):
-    pass
+def Simu_Process(pipe):
+    global _systime, _event_Scheduler
+    while True:
+        data = pipe.recv()
+        if data == "test":
+            print "entering Simu_Process"
+        else:
+            print data
+            pipe.send(12345)
 
-signal = threading.Event()
-signal.clear()
 
-class Handler(StreamRequestHandler):
-    def handle(self):
-        global signal
-        data_recv = self.request.recv(1024)
-        print "data is %s" %data_recv
-        self.request.sendall("start, now")
-        if data_recv == "ready":
-            print "aaaa"
-            signal.set()
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.bind(('127.0.0.1', 51234))
+s.listen(1)
+print 'listening...'
 
-server = Server(('', 51234), Handler)
+def handle(sock, addr, pipe):
+    print 'Accept new connection from %s:%s...' % addr
+    pipe.send("test")
+    while True:
+        sock_data = sock.recv(1024)
+        if sock_data:
+            print 'sock_data received is', sock_data
+            pipe.send(sock_data)
+        pipe_data = pipe.recv()
+        if pipe_data:
+            print 'pipe_data received is', pipe_data
+            sock.send(str(pipe_data))
 
-class Simu_Process(threading.Thread):
-    def run(self):
-        global _systime, signal, _event_Scheduler
-        print "entering Simu_Process"
-        signal.wait()
-        print "signal get and start processing"
-        while len(_event_Scheduler) > 0:
-            cur_event = _event_Scheduler.pop(0);
-            _systime = cur_event.time;
-            if cur_event.process() == -1:
-                break;
+while True:
+    sock, addr = s.accept()
+    pipe = multiprocessing.Pipe()
+    p_simu = multiprocessing.Process(target=Simu_Process, args=(pipe[0], ))
+    t = threading.Thread(target=handle, args=(sock, addr, pipe[1]))
+    p_simu.start()
+    t.start()
 
-Simu_Process().start()
-
-server.serve_forever()
 ######################################
 
 
