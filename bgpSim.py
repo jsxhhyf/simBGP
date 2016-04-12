@@ -1563,16 +1563,20 @@ _systime = 0;
 def Simu_Process(pipe):
     global _systime, _event_Scheduler
     while True:
-        data = pipe.recv()
-        if data == "test":
-            print "entering Simu_Process"
-        else:
-            print data
-            pipe.send(12345)
+        while len(_event_Scheduler) > 0:
+            cur_event = _event_Scheduler.pop(0)
+            _systime = cur_event.time
+            if cur_event.process() == -1:
+                print 'cur_event process error'
+                break
+        pipe_data = pipe.recv()
+        while pipe_data:
+            # do something
+            pipe_data = pipe.recv()
 
 
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.bind(('127.0.0.1', 51234))
+s.bind(('', 51234))
 s.listen(1)
 print 'listening...'
 
