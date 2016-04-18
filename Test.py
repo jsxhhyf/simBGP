@@ -10,6 +10,11 @@ def process(pipe):
     print 'first', data
     data = pipe.recv()
     print 'second', data
+    data = pipe.recv()
+    while data:
+        print 1
+        data = pipe.recv()
+    print 2
 
 def handle(sock, addr, pipe):
     print 'Accept new connection from %s:%s...' % addr
