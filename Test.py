@@ -6,20 +6,12 @@ s.listen(1)
 print 'listening...'
 
 def process(pipe):
-    data = pipe.recv()
-    print 'first', data
-    data = pipe.recv()
-    print 'second', data
-    data = pipe.recv()
-    while data:
-        print 1
-        data = pipe.recv()
-    print 2
+    global _systime, _event_Scheduler
+    pipe_data = pipe.recv()
+
 
 def handle(sock, addr, pipe):
     print 'Accept new connection from %s:%s...' % addr
-    pipe.send("test1")
-    pipe.send("test2")
     while True:
         sock_data = sock.recv(1024)
         if sock_data:

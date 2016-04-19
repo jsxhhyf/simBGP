@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 import sys
 import string
 import re
@@ -9,7 +8,6 @@ import random
 import threading
 import multiprocessing
 import socket
-import os
 try:
     import cPickle as pickle
 except ImportError:
@@ -1555,73 +1553,22 @@ def readConfig(filename):
 
 _event_Scheduler = COrderedList()
 
-if len(sys.argv) < 2:
-    print "Usage: bgpSimfull.py configfile\n"
-    sys.exit(-1)
-
-readConfig(sys.argv[1])
+# if len(sys.argv) < 2:
+#     print "Usage: bgpSimfull.py configfile\n"
+#     sys.exit(-1)
+# 
+# readConfig(sys.argv[1])
 
 _systime = 0
 
 # used for distributed simulation
 # by Phil
 
-def Simu_Process(pipe):
-    global _systime, _event_Scheduler
-    temp_event = None # used for accept udpate message
-    count = 0
-    while True:
-        count += 1
-        while len(_event_Scheduler) > 0:
-            cur_event = _event_Scheduler.pop(0)
-            _systime = cur_event.time
-            if cur_event.process() == -1:
-                print 'cur_event process error'
-                break
-        if SHOW_FINAL_RIBS:
-            print "-----======$$$$$$$$ FINISH {n} $$$$$$$$$=======------".format(n=count)
-            for rt in _router_list.values():
-                rt.showAllRib()
-        pipe_data = pipe.recv()
-        while not pipe_data == 'EOF':
-            temp_event = pickle.loads(pipe_data)
-            _event_Scheduler.add(temp_event)
-            pipe_data = pipe.recv()
-
-def handle(sock, addr, pipe):
-    print 'Accept new connection from %s:%s...' % addr
-    pipe.send("test")
-    while True:
-        sock_data = sock.recv(1024)
-        if sock_data:
-            print 'sock_data received is', sock_data
-            print 'forwarding to simu_process...'
-            pipe.send(sock_data)
-        pipe_data = pipe.recv()
-        if pipe_data:
-            print 'pipe_data received is', pipe_data
-            sock.send(str(pipe_data))
-
-if __name__ == '__main__':
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(('', 58888))
-    s.listen(3)
-    print 'listening...'
-
-    while True:
-        sock, addr = s.accept()
-        pipe = multiprocessing.Pipe()
-        p_simu = multiprocessing.Process(target=Simu_Process, args=(pipe[0], ))
-        t = threading.Thread(target=handle, args=(sock, addr, pipe[1]))
-        p_simu.start()
-        t.start()
-
-######################################
-
-
-# if CHECK_LOOP:
-#     nodes = _infect_nodes.keys()
-#     for node in nodes:
-#         removeInfectNode(node, LOOPCHECK_FAILURE)
-#
+HOST = '127.0.0.1'
+PORT = 58888
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect((HOST, PORT))
+s.sendall("ready")
+update = CUpdate('121.248.1.0')
+s.close()
 
