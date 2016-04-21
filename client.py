@@ -1568,7 +1568,16 @@ HOST = '127.0.0.1'
 PORT = 58888
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.connect((HOST, PORT))
-s.sendall("ready")
-update = CUpdate('121.248.1.0')
+update = CUpdate('177.8.241.0')
+path = CPath()
+path.nexthop  = '0.0.2.6'
+path.aspath.append(6)
+update.paths.append(path)
+event = CEvent(6.5, ['0.0.2.6', '0.0.1.4', update], EVENT_RECEIVE)
+pickled_event = pickle.dumps(event)
+eventsize = len(pickled_event)
+print '%04d' % eventsize
+s.sendall('%04d' % eventsize)
+s.sendall(pickled_event)
 s.close()
 

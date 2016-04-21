@@ -48,10 +48,10 @@ ALTERNATIVE_BACKUP = 2
 RANDOMIZED_KEY = ""
 
 SHOW_UPDATE_RIBS = False
-SHOW_RECEIVE_EVENTS = True # for debug by phil
+SHOW_RECEIVE_EVENTS = False # for debug by phil
 SHOW_SEND_EVENTS = False
 SHOW_FINAL_RIBS = True # for debug by phil
-SHOW_DEBUG = True # for debug by phil
+SHOW_DEBUG = False # for debug by phil
 
 CHECK_LOOP = False
 
@@ -270,7 +270,7 @@ class CRouter:
                 # print str(newpath)
         return newpath
 
-    def exportFilter(self, pid, prefix, path):
+    def exportFilter(self, pid, prefix, path): # prevent loop
         global _router_list, ssld, _route_map_list, SHOW_DEBUG
         if path.src_pid == pid:
             if SHOW_DEBUG:
@@ -309,7 +309,7 @@ class CRouter:
                 return False
         return True
 
-    def exportAction(self, pid, prefix, path):
+    def exportAction(self, pid, prefix, path): # EBGP case
         global _route_map_list, EPIC, _systime
         newpath = CPath()
         newpath.copy(path)
@@ -507,6 +507,10 @@ class CRouter:
             if backup_routing and len(self.loc_rib[prefix]) > 0 and self.loc_rib[prefix][
                 0].alternative != ALTERNATIVE_BACKUP:
                 # send_some = False
+
+
+
+
                 for pid in self.peers.keys():
                     self.presend2peer(pid, prefix)
                 # send_some = True
@@ -680,9 +684,15 @@ class CRouter:
             path = self.loc_rib[prefix][i]
             if self.exportFilter(pid, prefix, path):
                 npath = self.exportAction(pid, prefix, path)
+                # for distributed simulation by phil
+                # print npath
+                ####################################
                 npath.index = i
                 update.paths.append(npath)
             i = i + 1
+        # for distributed simulation by phil
+        print 'Sending update from {a} to {b}'.format(a=self.asn, b=pid[-1]), update
+        #####################################
         # backup routing
         if backup_routing and self.loc_rib.has_key(prefix) and len(self.loc_rib[prefix]) > 0 and self.loc_rib[prefix][
             0].alternative != ALTERNATIVE_BACKUP:
@@ -1437,13 +1447,13 @@ def readConfig(filename):
                 elif cmd[2] == "advertisement-interval":  # in seconds
                     curNB.mrai_base = float(cmd[3])
                 elif cmd[2] == "remote-as":
-                    x = 1  # do nothing
                     # used for distributed simualation
                     # by Phil
                     if len(cmd) == 5:
                         curRT.is_cross_server = True
                         curRT.neighbor_servers[int(cmd[4]) - 1] = 1
                         curRT.remote_peers.append([peerid, cmd[4]])
+                        _router_list[peerid] = CRouter(cmd[3], peerid)
                 else:
                     print "unknown neighbor configuration", cmd[2], "in", cmd
                     sys.exit(-1)
@@ -1570,7 +1580,8 @@ def Simu_Process(pipe):
     global _systime, _event_Scheduler
     temp_event = None # used for accept udpate message
     count = 0
-    while True:
+    stop = 1
+    while stop:
         count += 1
         while len(_event_Scheduler) > 0:
             cur_event = _event_Scheduler.pop(0)
@@ -1582,25 +1593,44 @@ def Simu_Process(pipe):
             print "-----======$$$$$$$$ FINISH {n} $$$$$$$$$=======------".format(n=count)
             for rt in _router_list.values():
                 rt.showAllRib()
-        pipe_data = pipe.recv()
-        while not pipe_data == 'EOF':
-            temp_event = pickle.loads(pipe_data)
-            _event_Scheduler.add(temp_event)
+        while True:
             pipe_data = pipe.recv()
-
+            if pipe_data != '':
+                temp_event = pickle.loads(pipe_data)
+                print 'NEWEVENT: ' + str(temp_event)
+                _event_Scheduler.add(temp_event)
+            elif pipe_data == '':
+                break
+            else:
+                stop = 0
+                break
 def handle(sock, addr, pipe):
     print 'Accept new connection from %s:%s...' % addr
-    pipe.send("test")
-    while True:
-        sock_data = sock.recv(1024)
-        if sock_data:
-            print 'sock_data received is', sock_data
-            print 'forwarding to simu_process...'
-            pipe.send(sock_data)
-        pipe_data = pipe.recv()
-        if pipe_data:
-            print 'pipe_data received is', pipe_data
-            sock.send(str(pipe_data))
+    stop = 1
+    while stop:
+        while True:
+            sock_data = sock.recv(4)
+            if sock_data == '':
+                pipe.send('')
+                break
+            elif sock_data == 'EOF':
+                pipe.send('EOF')
+                stop = 0
+                break
+            print 'event size is: ', sock_data
+            sock_data = sock.recv(int(sock_data))
+            if sock_data != '':
+                print 'sock_data received is', sock_data
+                print 'forwarding to simu_process...'
+                pipe.send(sock_data)
+
+        while True:
+            pipe_data = pipe.recv()
+            if pipe_data != 'EOF':
+                print 'pipe_data received is', pipe_data
+                sock.send(str(pipe_data))
+            else:
+                break
 
 if __name__ == '__main__':
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
