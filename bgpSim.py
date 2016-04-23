@@ -480,7 +480,7 @@ class CRouter:
                 if next_mrai < 0:
                     self.sendto(pid, p)
 
-    def update(self, prefix):
+    def update(self, prefix, pipe):
         global SHOW_UPDATE_RIBS, CHECK_LOOP, SHOW_DEBUG, GHOST_FLUSHING, GHOST_BUSTER
         [change, trend] = self.pathSelection(prefix)
         if SHOW_UPDATE_RIBS:
@@ -497,7 +497,7 @@ class CRouter:
                         if next_mrai > 0:
                             _event_Scheduler.add(CEvent(next_mrai, [self.id, pid, prefix], EVENT_MRAI_EXPIRE_SENDTO))
             for pid in self.peers.keys():
-                self.presend2peer(pid, prefix)
+                self.presend2peer(pid, prefix, pipe)
             # if SHOW_UPDATE_RIBS:
             #	self.showRib(prefix)
             if CHECK_LOOP:
@@ -532,7 +532,7 @@ class CRouter:
         for p in self.loc_rib.keys():
             self.showRib(p)
 
-    def presend2peer(self, pid, prefix):
+    def presend2peer(self, pid, prefix, pipe):
         global wrate, MRAI_PEER_BASED, LINK_DOWN, EVENT_MRAI_EXPIRE_SENDTO, SHOW_DEBUG
         if self.getPeerLink(pid).status == LINK_DOWN:
             return
@@ -549,26 +549,26 @@ class CRouter:
         # print str(self), str(pid), str(prefix), next_mrai, wrate, self.isWithdrawal(pid, prefix)
         if next_mrai < 0 or ((not wrate) and self.isWithdrawal(pid, prefix)):
             # print "MRAI expires, send imediately ...", pid
-            self.sendto(pid, prefix)
+            self.sendto(pid, prefix, pipe)
         else:  # do nothing, the scheduler will call sendto automatically when mrai timer expires
             if SHOW_DEBUG:
                 print getSystemTimeStr(), self, pid, prefix, "MRAI does not expire, wait...", formatTime(
                     next_mrai - _systime)
 
-    def announce_prefix(self, prefix):
+    def announce_prefix(self, prefix, pipe):
         global default_local_preference
         npath = CPath()
         npath.nexthop = self.id
         npath.local_pref = default_local_preference
         self.origin_rib[prefix] = npath
-        self.update(prefix)
+        self.update(prefix, pipe)
 
     def withdraw_prefix(self, prefix):
         if self.origin_rib.has_key(prefix):
             del self.origin_rib[prefix]
             self.update(prefix)
 
-    def sendto(self, pid, prefix):  # from out_queue
+    def sendto(self, pid, prefix, pipe):  # from out_queue
         global _event_Scheduler, SHOW_SEND_EVENTS, GHOST_BUSTER
         # print self, "sendto", pid, prefix
         sendsth = False
@@ -578,13 +578,13 @@ class CRouter:
             i = 0
             while i < len(peer.out_queue):
                 if prefix is None:
-                    if self.sendtopeer(pid, peer.out_queue[i]):
+                    if self.sendtopeer(pid, peer.out_queue[i], pipe):
                         sendsth = True
                     if not self.isWithdrawal(pid, peer.out_queue[i]):
                         sendWithdraw = False
                     peer.out_queue.pop(i)
                 elif prefix == peer.out_queue[i]:
-                    if self.sendtopeer(pid, peer.out_queue[i]):
+                    if self.sendtopeer(pid, peer.out_queue[i], pipe):
                         sendsth = True
                     if not self.isWithdrawal(pid, peer.out_queue[i]):
                         sendWithdraw = False
@@ -649,8 +649,18 @@ class CRouter:
             not backup_routing or self.peers[pid].rib_out[prefix][0].alternative != ALTERNATIVE_BACKUP):
             return self.delivery(pid, prefix, update)
 
-    def delivery(self, pid, prefix, update):
-        global MAX_PATH_NUMBER
+    def delivery(self, pid, prefix, update, pipe):
+        global MAX_PATH_NUMBER, _router_list
+        # used for distributed emulation by phil
+        if _router_list[pid].is_cross_server:
+            message = UpdateMessage(self.id, pid, update)
+            pickled_message = pickle.dumps(message)
+            message_size = len(pickled_message)
+            pipe.send('%04d' % message_size)
+            pipe.send(pickled_message)
+            pipe.send('')
+            return
+        ########################################
         change = False
         if self.peers[pid].rib_out.has_key(prefix) and len(update.paths) == len(self.peers[pid].rib_out[prefix]):
             if MAX_PATH_NUMBER > 1:
@@ -676,7 +686,7 @@ class CRouter:
                        EVENT_RECEIVE))
         return change
 
-    def sendtopeer(self, pid, prefix):
+    def sendtopeer(self, pid, prefix, pipe):
         global _event_Scheduler, backup_routing, ALTERNATIVE_BACKUP, ALTERNATIVE_EXIST, MAX_PATH_NUMBER
         update = CUpdate(prefix)
         i = 0
@@ -691,7 +701,7 @@ class CRouter:
                 update.paths.append(npath)
             i = i + 1
         # for distributed simulation by phil
-        print 'Sending update from {a} to {b}'.format(a=self.asn, b=pid[-1]), update
+        # print 'Sending update from {a} to {b}'.format(a=self.asn, b=pid[-1]), update
         #####################################
         # backup routing
         if backup_routing and self.loc_rib.has_key(prefix) and len(self.loc_rib[prefix]) > 0 and self.loc_rib[prefix][
@@ -719,7 +729,7 @@ class CRouter:
                 else:
                     update.paths[0].alternative = ALTERNATIVE_EXIST
         # compare update and rib_out
-        return self.delivery(pid, prefix, update)
+        return self.delivery(pid, prefix, update, pipe)
 
     def processDelay(self):
         return toSystemTime(interpretDelayfunc(self, self.rand_seed, default_process_delay_func))
@@ -1152,7 +1162,7 @@ class CEvent:
         else:
             print formatTime(self.time), "unknown event ..."
 
-    def process(self): # used for distributed simulation by Phil
+    def process(self, pipe): # used for distributed simulation by Phil
         global _router_list
         self.showEvent()
         if self.type == EVENT_RECEIVE:
@@ -1160,7 +1170,7 @@ class CEvent:
             _router_list[rvid].receive(rtid, update)
         elif self.type == EVENT_UPDATE:
             [rtid, prefix] = self.param
-            _router_list[rtid].update(prefix)
+            _router_list[rtid].update(prefix, pipe)
         elif self.type == EVENT_MRAI_EXPIRE_SENDTO:
             [sdid, rvid, prefix] = self.param
             _router_list[sdid].resetMRAI(rvid, prefix)
@@ -1179,7 +1189,7 @@ class CEvent:
             _router_list[rt2].peerUp(rt1)
         elif self.type == EVENT_ANNOUNCE_PREFIX:
             [rtid, prefix] = self.param
-            _router_list[rtid].announce_prefix(prefix)
+            _router_list[rtid].announce_prefix(prefix, pipe)
         elif self.type == EVENT_WITHDRAW_PREFIX:
             [rtid, prefix] = self.param
             _router_list[rtid].withdraw_prefix(prefix)
@@ -1431,8 +1441,7 @@ def readConfig(filename):
                 if not curRT.peers.has_key(peerid):
                     link = getRouterLink(curRT.id, peerid)
                     curNB = CPeer(peerid, link)
-                    if not (len(cmd) == 5 and cmd[2] == "remote-as"): # used for distributed simulation by Phil
-                        curRT.peers[peerid] = curNB
+                    curRT.peers[peerid] = curNB
                 if cmd[2] == "route-reflector-client":
                     curNB.route_reflector_client = True
                 elif cmd[2] == "route-map":
@@ -1450,10 +1459,10 @@ def readConfig(filename):
                     # used for distributed simualation
                     # by Phil
                     if len(cmd) == 5:
-                        curRT.is_cross_server = True
                         curRT.neighbor_servers[int(cmd[4]) - 1] = 1
                         curRT.remote_peers.append([peerid, cmd[4]])
-                        _router_list[peerid] = CRouter(cmd[3], peerid)
+                        _router_list[peerid] = CRouter(int(cmd[3]), peerid)
+                        _router_list[peerid].is_cross_server = True
                 else:
                     print "unknown neighbor configuration", cmd[2], "in", cmd
                     sys.exit(-1)
@@ -1576,17 +1585,28 @@ _systime = 0
 # used for distributed simulation
 # by Phil
 
+class UpdateMessage:
+
+    src_pid = None
+    dest_pid = None
+    update = None
+
+    def __init__(self, src_pid, dest_pid, update):
+        self.src_pid = src_pid
+        self.dest_pid = dest_pid
+        self.update = update
+
 def Simu_Process(pipe):
-    global _systime, _event_Scheduler
-    temp_event = None # used for accept udpate message
+    global _systime, _event_Scheduler, _router_list
     count = 0
     stop = 1
     while stop:
         count += 1
+        print count
         while len(_event_Scheduler) > 0:
             cur_event = _event_Scheduler.pop(0)
             _systime = cur_event.time
-            if cur_event.process() == -1:
+            if cur_event.process(pipe) == -1:
                 print 'cur_event process error'
                 break
         if SHOW_FINAL_RIBS:
@@ -1596,8 +1616,9 @@ def Simu_Process(pipe):
         while True:
             pipe_data = pipe.recv()
             if pipe_data != '':
-                temp_event = pickle.loads(pipe_data)
-                print 'NEWEVENT: ' + str(temp_event)
+                message = pickle.loads(pipe_data)
+                print message.update
+                temp_event = CEvent(_router_list[message.src_pid].getPeerLink(message.dest_pid).next_delivery_time(message.src_pid, message.update.size()), [message.src_pid, message.dest_pid, message.update], EVENT_RECEIVE)
                 _event_Scheduler.add(temp_event)
             elif pipe_data == '':
                 break
@@ -1610,29 +1631,32 @@ def handle(sock, addr, pipe):
     while stop:
         while True:
             sock_data = sock.recv(4)
-            if sock_data == '':
+            print 'xxxxxxxx'
+            if sock_data == '..':
+                print 'abcabc***************'
                 pipe.send('')
                 break
             elif sock_data == 'EOF':
                 pipe.send('EOF')
                 stop = 0
                 break
-            print 'event size is: ', sock_data
+            print 'update size is: ', sock_data
             sock_data = sock.recv(int(sock_data))
+            print 'receive update from server 2'
             if sock_data != '':
-                print 'sock_data received is', sock_data
-                print 'forwarding to simu_process...'
+
                 pipe.send(sock_data)
 
         while True:
             pipe_data = pipe.recv()
-            if pipe_data != 'EOF':
-                print 'pipe_data received is', pipe_data
+            if pipe_data != '':
+                print 'pipe_data received'
                 sock.send(str(pipe_data))
             else:
+                sock.send('..')
                 break
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(('', 58888))
     s.listen(3)
@@ -1642,8 +1666,8 @@ if __name__ == '__main__':
         sock, addr = s.accept()
         pipe = multiprocessing.Pipe()
         p_simu = multiprocessing.Process(target=Simu_Process, args=(pipe[0], ))
-        t = threading.Thread(target=handle, args=(sock, addr, pipe[1]))
         p_simu.start()
+        t = threading.Thread(target=handle, args=(sock, addr, pipe[1]))
         t.start()
 
 ######################################
